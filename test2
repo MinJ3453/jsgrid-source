@@ -1,0 +1,183 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.RegularExpressions;
+using HtmlAgilityPack;
+
+namespace YourApp.Helpers
+{
+    public static class XssFilter
+    {
+        private static readonly HashSet<string> AllowedTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "a","b","strong","i","em","u","p","br","ul","ol","li","blockquote","pre","code",
+            "span","div","img","h1","h2","h3","h4","h5","h6","table","thead","tbody","tr","th","td","hr"
+        };
+
+        private static readonly Dictionary<string, HashSet<string>> AllowedAttrs = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "*", new HashSet<string>(new [] { "class","id","title","aria-label","role" }, StringComparer.OrdinalIgnoreCase) },
+            { "a", new HashSet<string>(new [] { "href","target","rel" }, StringComparer.OrdinalIgnoreCase) },
+            { "img", new HashSet<string>(new [] { "src","alt","width","height" }, StringComparer.OrdinalIgnoreCase) },
+            { "table", new HashSet<string>(new [] { "border","cellpadding","cellspacing" }, StringComparer.OrdinalIgnoreCase) },
+            { "th", new HashSet<string>(new [] { "colspan","rowspan","scope" }, StringComparer.OrdinalIgnoreCase) },
+            { "td", new HashSet<string>(new [] { "colspan","rowspan" }, StringComparer.OrdinalIgnoreCase) }
+        };
+
+        private static readonly HashSet<string> DangerousTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "script","noscript","iframe","object","embed","link","meta","base","form","input","button","select","textarea","style","svg","math"
+        };
+
+        private static readonly HashSet<string> AllowedSchemes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "http","https","mailto","tel"
+        };
+
+        private static readonly Regex DataImageRegex = new Regex(@"^data:image/(png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex OnAttrRegex = new Regex(@"^on[a-z0-9_]*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        public static string Sanitize(string html)
+        {
+            if (string.IsNullOrEmpty(html)) return string.Empty;
+
+            var doc = new HtmlDocument();
+            doc.OptionFixNestedTags = true;
+            doc.LoadHtml(html);
+
+            RemoveComments(doc);
+            RemoveDangerousNodes(doc);
+            WalkAndClean(doc.DocumentNode);
+
+            return doc.DocumentNode.InnerHtml;
+        }
+
+        private static void RemoveComments(HtmlDocument doc)
+        {
+            var comments = doc.DocumentNode.SelectNodes("//comment()");
+            if (comments != null)
+            {
+                foreach (var c in comments.ToList())
+                {
+                    c.Remove();
+                }
+            }
+        }
+
+        private static void RemoveDangerousNodes(HtmlDocument doc)
+        {
+            foreach (var tag in DangerousTags)
+            {
+                var nodes = doc.DocumentNode.SelectNodes("//" + tag);
+                if (nodes == null) continue;
+                foreach (var n in nodes.ToList())
+                {
+                    n.Remove();
+                }
+            }
+        }
+
+        private static void WalkAndClean(HtmlNode root)
+        {
+            var nodes = root.SelectNodes(".//*");
+            if (nodes == null) return;
+
+            foreach (var node in nodes.ToList())
+            {
+                if (node.NodeType != HtmlNodeType.Element) continue;
+
+                if (!AllowedTags.Contains(node.Name))
+                {
+                    var replacement = HtmlNode.CreateNode(node.InnerHtml ?? string.Empty);
+                    node.ParentNode.ReplaceChild(replacement, node);
+                    continue;
+                }
+
+                CleanAttributes(node);
+
+                if (node.Name.Equals("a", StringComparison.OrdinalIgnoreCase))
+                {
+                    FixLinkRel(node);
+                }
+            }
+        }
+
+        private static void CleanAttributes(HtmlNode node)
+        {
+            var keep = new List<HtmlAttribute>();
+
+            foreach (var attr in node.Attributes.ToList())
+            {
+                if (OnAttrRegex.IsMatch(attr.Name))
+                {
+                    node.Attributes.Remove(attr);
+                    continue;
+                }
+
+                if (attr.Name.Equals("style", StringComparison.OrdinalIgnoreCase))
+                {
+                    node.Attributes.Remove(attr);
+                    continue;
+                }
+
+                bool allowedForTag = AllowedAttrs.ContainsKey(node.Name) && AllowedAttrs[node.Name].Contains(attr.Name);
+                bool allowedGlobal = AllowedAttrs.ContainsKey("*") && AllowedAttrs["*"].Contains(attr.Name);
+
+                if (!allowedForTag && !allowedGlobal)
+                {
+                    node.Attributes.Remove(attr);
+                    continue;
+                }
+
+                if ((attr.Name.Equals("href", StringComparison.OrdinalIgnoreCase) ||
+                     attr.Name.Equals("src", StringComparison.OrdinalIgnoreCase)))
+                {
+                    if (!IsSafeUrl(attr.Value))
+                    {
+                        node.Attributes.Remove(attr);
+                        continue;
+                    }
+                }
+
+                keep.Add(attr);
+            }
+
+            node.Attributes.RemoveAll();
+            foreach (var a in keep)
+            {
+                node.Attributes.Add(a);
+            }
+        }
+
+        private static void FixLinkRel(HtmlNode node)
+        {
+            string target = node.GetAttributeValue("target", "").Trim();
+            if (target == "_blank")
+            {
+                string rel = node.GetAttributeValue("rel", "");
+                var parts = new HashSet<string>(rel.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries), StringComparer.OrdinalIgnoreCase);
+                parts.Add("noopener");
+                parts.Add("noreferrer");
+                node.SetAttributeValue("rel", string.Join(" ", parts));
+            }
+        }
+
+        private static bool IsSafeUrl(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return true;
+            if (value.StartsWith("#")) return true;
+            if (value.StartsWith("//")) return false;
+
+            if (value.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                return DataImageRegex.IsMatch(value);
+            }
+
+            Uri uri;
+            if (Uri.TryCreate(value, UriKind.Relative, out uri)) return true;
+            if (Uri.TryCreate(value, UriKind.Absolute, out uri)) return AllowedSchemes.Contains(uri.Scheme);
+
+            return false;
+        }
+    }
+}
