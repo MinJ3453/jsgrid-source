@@ -1,0 +1,40 @@
+DateTime now = DateTime.Now;
+
+// 5분 버킷 계산
+int bucketMinutes = (now.Minute / 5) * 5;
+var bucketTime = new DateTime(now.Year, now.Month, now.Day, now.Hour, bucketMinutes, 0);
+string bucketKey = bucketTime.ToString("yyyyMMddHHmm");
+
+// Redis JSON 가져오기
+TimeBucketMap? buckets = JsonSerializer.Deserialize<TimeBucketMap>(raw);
+
+// Null이면 빈 맵 생성
+buckets ??= new TimeBucketMap();
+
+B result;
+
+// 1) 기존 버킷이 있는 경우
+if (buckets.TryGetValue(bucketKey, out result))
+{
+    result.Time = bucketKey;
+}
+else
+{
+    // 2) 신규 버킷 생성
+    result = new B
+    {
+        Time = bucketKey,
+        G = 0,
+        M = 0
+    };
+
+    // Dictionary에 추가
+    buckets[bucketKey] = result;
+
+    // Redis에 다시 저장하려면 ↓
+    string updatedJson = JsonSerializer.Serialize(buckets);
+    db.StringSet("yourKey", updatedJson);
+}
+
+// result 반환
+return result;
