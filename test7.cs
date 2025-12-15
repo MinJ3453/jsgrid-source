@@ -26,3 +26,9 @@ public void CleanupOldBuckets(PROVISIONAPI_LIMIT data, int days)
     cleanup(data.Member);
     cleanup(data.Search);
 }
+
+string input = val.GroupLimitType; // 예: "D", "W", "M"
+
+LimitType type = (LimitType)Enum.Parse(typeof(LimitType), input, true);
+
+int days = (int)type; // D=1, W=7, M=30
