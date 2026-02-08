@@ -1,46 +1,47 @@
-
-    using System;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-public class ExpireNoticeService
+public class ExpireNoticeService : IExpireNoticeService
 {
+    private readonly IMailSendService _mailService;
+    private readonly ISmsSendService _smsService;
     private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
 
-    public Task SendAllAsync()
+    public ExpireNoticeService(
+        IMailSendService mailService,
+        ISmsSendService smsService)
     {
-        return ExecuteAsync(SendType.All);
+        _mailService = mailService;
+        _smsService = smsService;
     }
 
     public Task SendAccountExpireMailAsync()
     {
-        return ExecuteAsync(SendType.AccountExpireMail);
+        return ExecuteAsync(_mailService.SendAccountExpireMailAsync);
     }
 
     public Task SendAccountExpireSmsAsync()
     {
-        return ExecuteAsync(SendType.AccountExpireSms);
+        return ExecuteAsync(_smsService.SendAccountExpireSmsAsync);
     }
 
     public Task SendPermissionExpireMailAsync()
     {
-        return ExecuteAsync(SendType.PermissionExpireMail);
+        return ExecuteAsync(_mailService.SendPermissionExpireMailAsync);
     }
 
-    private async Task ExecuteAsync(SendType type)
+    public Task SendAllAsync()
+    {
+        return ExecuteAllAsync();
+    }
+
+    private async Task ExecuteAsync(Func<Task> action)
     {
         await _lock.WaitAsync();
         try
         {
-            if (type == SendType.All)
-            {
-                await SafeExecute(SendAccountExpireMail);
-                await SafeExecute(SendAccountExpireSms);
-                await SafeExecute(SendPermissionExpireMail);
-                return;
-            }
-
-            await ExecuteByType(type);
+            await SafeExecute(action);
         }
         finally
         {
@@ -48,18 +49,18 @@ public class ExpireNoticeService
         }
     }
 
-    private Task ExecuteByType(SendType type)
+    private async Task ExecuteAllAsync()
     {
-        switch (type)
+        await _lock.WaitAsync();
+        try
         {
-            case SendType.AccountExpireMail:
-                return SafeExecute(SendAccountExpireMail);
-            case SendType.AccountExpireSms:
-                return SafeExecute(SendAccountExpireSms);
-            case SendType.PermissionExpireMail:
-                return SafeExecute(SendPermissionExpireMail);
-            default:
-                return Task.CompletedTask;
+            await SafeExecute(_mailService.SendAccountExpireMailAsync);
+            await SafeExecute(_smsService.SendAccountExpireSmsAsync);
+            await SafeExecute(_mailService.SendPermissionExpireMailAsync);
+        }
+        finally
+        {
+            _lock.Release();
         }
     }
 
@@ -75,31 +76,7 @@ public class ExpireNoticeService
         }
     }
 
-    private Task SendAccountExpireMail()
-    {
-        return Task.CompletedTask;
-    }
-
-    private Task SendAccountExpireSms()
-    {
-        return Task.CompletedTask;
-    }
-
-    private Task SendPermissionExpireMail()
-    {
-        return Task.CompletedTask;
-    }
-
     private void Log(Exception ex)
     {
     }
 }
-
-public enum SendType
-{
-    All = 0,
-    AccountExpireMail = 1,
-    AccountExpireSms = 2,
-    PermissionExpireMail = 3
-}
-    
