@@ -1,20 +1,33 @@
-using System;
+
+    using System;
 using System.Threading;
 using System.Threading.Tasks;
-
-public enum SendType
-{
-    All = 0,
-    AccountExpireMail = 1,
-    AccountExpireSms = 2,
-    PermissionExpireMail = 3
-}
 
 public class ExpireNoticeService
 {
     private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
 
-    public async Task RunAsync(SendType type)
+    public Task SendAllAsync()
+    {
+        return ExecuteAsync(SendType.All);
+    }
+
+    public Task SendAccountExpireMailAsync()
+    {
+        return ExecuteAsync(SendType.AccountExpireMail);
+    }
+
+    public Task SendAccountExpireSmsAsync()
+    {
+        return ExecuteAsync(SendType.AccountExpireSms);
+    }
+
+    public Task SendPermissionExpireMailAsync()
+    {
+        return ExecuteAsync(SendType.PermissionExpireMail);
+    }
+
+    private async Task ExecuteAsync(SendType type)
     {
         await _lock.WaitAsync();
         try
@@ -27,7 +40,7 @@ public class ExpireNoticeService
                 return;
             }
 
-            await SendByType(type);
+            await ExecuteByType(type);
         }
         finally
         {
@@ -35,14 +48,20 @@ public class ExpireNoticeService
         }
     }
 
-    private Task SendByType(SendType type)
-        => type switch
+    private Task ExecuteByType(SendType type)
+    {
+        switch (type)
         {
-            SendType.AccountExpireMail => SafeExecute(SendAccountExpireMail),
-            SendType.AccountExpireSms => SafeExecute(SendAccountExpireSms),
-            SendType.PermissionExpireMail => SafeExecute(SendPermissionExpireMail),
-            _ => Task.CompletedTask
-        };
+            case SendType.AccountExpireMail:
+                return SafeExecute(SendAccountExpireMail);
+            case SendType.AccountExpireSms:
+                return SafeExecute(SendAccountExpireSms);
+            case SendType.PermissionExpireMail:
+                return SafeExecute(SendPermissionExpireMail);
+            default:
+                return Task.CompletedTask;
+        }
+    }
 
     private async Task SafeExecute(Func<Task> action)
     {
@@ -75,3 +94,12 @@ public class ExpireNoticeService
     {
     }
 }
+
+public enum SendType
+{
+    All = 0,
+    AccountExpireMail = 1,
+    AccountExpireSms = 2,
+    PermissionExpireMail = 3
+}
+    
